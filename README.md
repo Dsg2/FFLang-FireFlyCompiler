@@ -4,10 +4,11 @@ Currently only tested on Win11.
 
 Has RayLib bindings as GUI and OpenCL bindings as GPU acceleration.
 Dependencies: Python runtime (tested 3.10 and higher) and C compiler.
-
+```
+transpile diagram
            .ff -> .c -> .exe
 .fl/.kl -> .cl -^
-
+```
 FFLang (.ff/.fl) files are transpiled to C via Python.
 .kl OpenCL kernel files are transpiled to .cl via klt.exe.
 
@@ -81,3 +82,6 @@ kernel to_pixels(float[] buf, int w, int h) -> float[] fb:
     fb[ind + 2] = 1.0 - v * v
     fb[ind + 3] = 1.0
 ```
+Screenshot: wave.exe
+
+![wave.exe allows mouse drags to create ripples](https://github.com/Dsg2/FFLang-FireFlyCompiler/blob/main/examples/wavedemo.png)
