@@ -1,0 +1,26 @@
+kernel wave(float[] buf, float[] prev, int w, int h, float damp) -> float[] out:
+    x = gid % w
+    y = gid / w
+    if x == 0 or x == w - 1 or y == 0 or y == h - 1:
+        out = 0.0
+        return
+    u  = buf[gid - 1]
+    d  = buf[gid + 1]
+    l  = buf[gid - w]
+    r  = buf[gid + w]
+    v  = (u + d + l + r) * 0.5 - prev[gid]
+    out = v * damp
+
+kernel to_pixels(float[] buf, int w, int h) -> float[] fb:
+    x = gid % w
+    y = gid / w
+    v  = buf[gid] * 0.5 + 0.5
+    if v < 0.0:
+        v = 0.0
+    if v > 1.0:
+        v = 1.0
+    ind = gid * 4
+    fb[ind]     = v * v
+    fb[ind + 1] = v
+    fb[ind + 2] = 1.0 - v * v
+    fb[ind + 3] = 1.0

@@ -12,6 +12,7 @@ class TT(Enum):
     TRUE = auto(); FALSE = auto()
     AND = auto(); OR = auto(); NOT = auto()
     BREAK = auto(); CONTINUE = auto()
+    GLOBAL = auto()
     IDENT = auto()
     PLUS = auto(); MINUS = auto(); STAR = auto()
     SLASH = auto(); PERCENT = auto()
@@ -33,6 +34,7 @@ KEYWORDS = {
     'true': TT.TRUE, 'false': TT.FALSE,
     'and': TT.AND, 'or': TT.OR, 'not': TT.NOT,
     'break': TT.BREAK, 'continue': TT.CONTINUE,
+    'global': TT.GLOBAL,
 }
 
 @dataclass

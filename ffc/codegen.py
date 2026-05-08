@@ -65,6 +65,7 @@ class CodeGen:
         self._func_return_types: Dict[str, str] = {}  # user func -> return type tag
         self._func_param_types: Dict[str, List[str]] = {}  # user func -> [param type tags]
         self._pending_frees: List[str] = []  # temp list vars to free at statement end
+        self._global_names: Dict[str, str] = {}  # name -> type tag; hoisted to file scope
 
     # ── Emit helpers ─────────────────────────────────────────
 
@@ -444,6 +445,8 @@ class CodeGen:
             self._run_kernel(node); return
         if isinstance(node, ExprStmt):
             self._expr_stmt(node); return
+        if isinstance(node, GlobalStmt):
+            return  # handled at file scope; nothing to emit in main()
         raise CodeGenError(f"Unknown stmt node {type(node).__name__}")
 
     def _flush_pending_frees(self, keep: str = None):
@@ -493,9 +496,14 @@ class CodeGen:
             name = node.target.name
             existing = self.scope.get(name)
             ct = self.ctype(vt) if vt != UNK else 'double'
+            is_global = name in self._global_names
             if not existing:
                 self.scope.set(name, vt)
-                self.emit(f'{ct} {name} = {val};')
+                if is_global:
+                    # File-scope declaration already emitted; just assign
+                    self.emit(f'{name} = {val};')
+                else:
+                    self.emit(f'{ct} {name} = {val};')
             else:
                 if existing == LIST and not self._expr_uses(name, node.value):
                     self.emit(f'ff_list_free(&{name});')
@@ -766,6 +774,47 @@ class CodeGen:
             elif isinstance(s, For):
                 self._collect_call_types(s.body, dict(mini), ptypes)
 
+    def _collect_global_names(self, funcs: List, main_body: List):
+        """Collect names declared 'global' in any function body, infer their
+        types from main_body assignments, and populate self._global_names."""
+        # Step 1: gather names
+        raw: set = set()
+        def _scan_body(stmts):
+            for s in stmts:
+                if isinstance(s, GlobalStmt):
+                    raw.update(s.names)
+                elif isinstance(s, If):
+                    _scan_body(s.body)
+                    for _, eb in s.elifs: _scan_body(eb)
+                    if s.else_body: _scan_body(s.else_body)
+                elif isinstance(s, (While, For)):
+                    _scan_body(s.body)
+        for f in funcs:
+            _scan_body(f.body)
+
+        if not raw:
+            return
+
+        # Step 2: infer types from main_body (first-assignment wins)
+        mini: dict = {}
+        def _scan_main(stmts):
+            for s in stmts:
+                if isinstance(s, Assignment) and isinstance(s.target, Ident):
+                    name = s.target.name
+                    if name not in mini:
+                        t = self._quick_type(s.value, mini)
+                        mini[name] = t if t != UNK else FLT
+                elif isinstance(s, If):
+                    _scan_main(s.body)
+                    for _, eb in s.elifs: _scan_main(eb)
+                    if s.else_body: _scan_main(s.else_body)
+                elif isinstance(s, (While, For)):
+                    _scan_main(s.body)
+        _scan_main(main_body)
+
+        for name in raw:
+            self._global_names[name] = mini.get(name, FLT)
+
     def _func_return_type(self, node: FuncDef) -> str:
         """Pre-scan a function body to determine its return type."""
         # Use already-inferred param types so return-type inference is accurate
@@ -807,7 +856,12 @@ class CodeGen:
         self.push_scope()
         for p, t in zip(node.params, ptypes):
             self.scope.set(p, t)
+        # Seed global names into function scope so the codegen can resolve their types
+        for gname, gtype in self._global_names.items():
+            self.scope.set(gname, gtype)
         for s in node.body:
+            if isinstance(s, GlobalStmt):
+                continue  # already seeded above; no C output needed
             self.stmt(s)
         # Emit a fallback return so C doesn't warn about missing return on non-void
         # functions that have no explicit return (e.g. procedures that sort in-place).
@@ -867,6 +921,21 @@ class CodeGen:
         # Pass 2 — infer return types (now that param types are known)
         for f in funcs:
             self._func_return_types[f.name] = self._func_return_type(f)
+
+        # Pass 3 — collect 'global' declarations and infer their types
+        self._collect_global_names(funcs, main_body)
+
+        # File-scope declarations for globals (zero-init; main() fills them in)
+        _GLOB_ZERO = {
+            INT: '0', FLT: '0.0', BOOL: '0', STR: 'NULL',
+            LIST: '{0}', IMAGE: '{0}', WIN: '{0}', SND: '{0}',
+        }
+        if self._global_names:
+            for gname, gtype in self._global_names.items():
+                ct   = self.ctype(gtype)
+                zero = _GLOB_ZERO.get(gtype, '0')
+                self.emit(f'static {ct} {gname} = {zero};')
+            self.emit()
 
         # Forward declarations
         for f in funcs:

@@ -12,7 +12,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <string.h>
 #include <CL/cl.h>
+#ifdef _WIN32
+/* Forward-declare GetModuleFileNameA to avoid pulling in all of windows.h
+   (which conflicts with raylib's Rectangle, CloseWindow, etc.) */
+extern __declspec(dllimport) unsigned long __stdcall
+    GetModuleFileNameA(void* hModule, char* lpFilename, unsigned long nSize);
+#endif
 
 #define OPENCL_MAX_KERNELS 16
 
@@ -36,21 +43,21 @@ static OpenCLContext* _opencl_ctx = NULL;
 
 /* Read file into string */
 static char* _opencl_read_file(const char* filename) {
-    FILE* f = fopen(filename, "r");
+    FILE* f = fopen(filename, "rb");  /* binary mode — ftell matches fread on Windows */
     if (!f) {
         fprintf(stderr, "Failed to open %s\n", filename);
         return NULL;
     }
-    
+
     fseek(f, 0, SEEK_END);
-    size_t size = ftell(f);
+    size_t size = (size_t)ftell(f);
     fseek(f, 0, SEEK_SET);
-    
+
     char* source = (char*)malloc(size + 1);
-    fread(source, 1, size, f);
-    source[size] = '\0';
+    size_t n = fread(source, 1, size, f);
+    source[n] = '\0';  /* null-terminate at actual bytes read, not ftell size */
     fclose(f);
-    
+
     return source;
 }
 
@@ -76,20 +83,55 @@ static inline void clbpinit() {
     printf("✓ OpenCL initialized\n");
 }
 
+/* Resolve a .cl filename relative to the running exe's directory.
+   Falls back to the bare name (CWD) if the exe path cannot be determined. */
+static char* _opencl_resolve_path(const char* cl_file) {
+    /* If already absolute, use as-is */
+    if (cl_file[0] == '/' || cl_file[0] == '\\' ||
+        (cl_file[0] && cl_file[1] == ':')) {
+        char* p = (char*)malloc(strlen(cl_file) + 1);
+        strcpy(p, cl_file);
+        return p;
+    }
+#ifdef _WIN32
+    char exe_path[260];  /* MAX_PATH without pulling in windows.h */
+    unsigned long len = GetModuleFileNameA(NULL, exe_path, 260);
+    if (len > 0) {
+        /* Strip the exe filename to get its directory */
+        char* last_sep = NULL;
+        for (char* p = exe_path; *p; p++)
+            if (*p == '\\' || *p == '/') last_sep = p;
+        if (last_sep) {
+            size_t dir_len  = (size_t)(last_sep - exe_path) + 1; /* include separator */
+            size_t file_len = strlen(cl_file);
+            char*  result   = (char*)malloc(dir_len + file_len + 1);
+            memcpy(result, exe_path, dir_len);
+            memcpy(result + dir_len, cl_file, file_len + 1);
+            return result;
+        }
+    }
+#endif
+    /* Fallback: use bare name (CWD) */
+    char* p = (char*)malloc(strlen(cl_file) + 1);
+    strcpy(p, cl_file);
+    return p;
+}
+
 /* Load a kernel from file */
 static inline int loadkernel(const char* cl_file, const char* kernel_name) {
-    char* s = _opencl_read_file(cl_file);
-    fprintf(stderr, "=== %s ===\n%s\n=== END ===\n", cl_file, s);
     if (!_opencl_ctx) clbpinit();
-    
+
     if (_opencl_ctx->num_kernels >= OPENCL_MAX_KERNELS) {
         fprintf(stderr, "Maximum kernels (%d) reached\n", OPENCL_MAX_KERNELS);
         return -1;
     }
-    
-    cl_int err;
-    char* source = _opencl_read_file(cl_file);
+
+    char* resolved = _opencl_resolve_path(cl_file);
+    char* source   = _opencl_read_file(resolved);
+    free(resolved);
     if (!source) return -1;
+
+    cl_int err;
     
     int idx = _opencl_ctx->num_kernels;
     

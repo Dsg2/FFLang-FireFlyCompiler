@@ -65,6 +65,11 @@ class Continue:
     line: int = 0
 
 @dataclass
+class GlobalStmt:
+    names: List[str]
+    line: int = 0
+
+@dataclass
 class ExprStmt:
     expr: Any
     line: int = 0

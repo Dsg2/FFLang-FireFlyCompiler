@@ -108,6 +108,8 @@ class Parser:
             return Continue(line=ln)
         if self.check(TT.RUN):
             return self.parse_run_kernel()
+        if self.check(TT.GLOBAL):
+            return self.parse_global_stmt()
         if self.check(TT.LET):
             self.advance()  # 'let' is optional sugar
 
@@ -222,6 +224,15 @@ class Parser:
         self.expect(TT.COLON); self.expect_newline()
         body = self.parse_block()
         return For(var, iter_expr, body, line=ln)
+
+    def parse_global_stmt(self) -> GlobalStmt:
+        ln = self.peek().line
+        self.expect(TT.GLOBAL)
+        names = [self.expect(TT.IDENT).value]
+        while self.match(TT.COMMA):
+            names.append(self.expect(TT.IDENT).value)
+        self.expect_newline()
+        return GlobalStmt(names, line=ln)
 
     def parse_run_kernel(self) -> RunKernel:
         ln = self.peek().line

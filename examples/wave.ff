@@ -1,0 +1,38 @@
+kernel wave      = load("wave.fl", "wave")
+kernel to_pixels = load("wave.fl", "to_pixels")
+
+w = 320
+h = 240
+n = w * h
+
+a  = zeros(n)      # ping buffer
+b  = zeros(n)      # pong buffer
+fb = zeros(n * 4)
+
+damp = 0.99
+frame = 0
+
+win = window(w, h, "wave")
+
+while win.open:
+    # Drop a ripple on left-click — write into whichever buffer is "current"
+    if win.mouse_down(0):
+        mx = int(win.mouse[0])
+        my = int(win.mouse[1])
+        if mx >= 1 and mx < w - 1 and my >= 1 and my < h - 1:
+            if frame % 2 == 0:
+                a[my * w + mx] = 1.0
+            else:
+                b[my * w + mx] = 1.0
+
+    # Alternate direction each frame — no list swapping needed
+    if frame % 2 == 0:
+        run wave(a, b, int(w), int(h), damp) -> b size(n)
+        run to_pixels(b, int(w), int(h)) -> fb size(n)
+    else:
+        run wave(b, a, int(w), int(h), damp) -> a size(n)
+        run to_pixels(a, int(w), int(h)) -> fb size(n)
+
+    frame = frame + 1
+    win.draw(fb, w, h)
+    win.tick(60)
