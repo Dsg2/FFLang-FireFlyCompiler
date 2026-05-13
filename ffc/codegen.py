@@ -33,7 +33,12 @@ _RETURN_TYPES = {
     'radians': FLT, 'degrees': FLT,
     'clamp': FLT, 'time': FLT,
     'load_image': IMAGE, 'load_sound': SND,
-    'read_file': STR,
+    'read_file': STR, 'exists': BOOL,
+    'load_list': LIST,
+    # String built-ins
+    'fmt': STR, 'strcat': STR, 'strlen': INT, 'streq': BOOL,
+    'toint': INT, 'tofloat': FLT,
+    'strsub': STR, 'strfind': INT, 'strtrim': STR,
 }
 
 
@@ -214,6 +219,34 @@ class CodeGen:
             return f'(int64_t){obj}.len' if t in (LIST, IMAGE, SND) else f'(int64_t)strlen({obj})'
         if name == 'float':   return f'(double)({a(0)})'
         if name == 'int':     return f'(int64_t)({a(0)})'
+        if name == 'str':
+            t = self.typeof(args[0]); v = a(0)
+            if t == STR: return v
+            if t == INT: return f'ff_str_int((int64_t)({v}))'
+            return f'ff_str((double)({v}))'
+        # ── String built-ins ──────────────────────────────────
+        if name == 'fmt':
+            buf = self.tmp('_sb')
+            self.emit(f'char* {buf} = _ff_next_str_buf();')
+            fmtarg = self.expr(args[0])
+            rest = ', '.join(self.expr(args[i]) for i in range(1, len(args)))
+            if rest:
+                self.emit(f'snprintf({buf}, FF_STR_MAXLEN, {fmtarg}, {rest});')
+            else:
+                self.emit(f'snprintf({buf}, FF_STR_MAXLEN, "%s", {fmtarg});')
+            return buf
+        if name == 'strcat':  return f'ff_strcat({a(0)}, {a(1)})'
+        if name == 'strlen':  return f'(int64_t)strlen({a(0)})'
+        if name == 'streq':   return f'(strcmp({a(0)}, {a(1)}) == 0)'
+        if name == 'toint':   return f'(int64_t)atoi({a(0)})'
+        if name == 'tofloat': return f'atof({a(0)})'
+        if name == 'strsub':
+            s0 = a(0)
+            if len(args) == 2:
+                return f'ff_strsub({s0}, (int64_t)({a(1)}), (int64_t)strlen({s0}))'
+            return f'ff_strsub({s0}, (int64_t)({a(1)}), (int64_t)({a(2)}))'
+        if name == 'strfind': return f'ff_strfind({a(0)}, {a(1)})'
+        if name == 'strtrim': return f'ff_strtrim({a(0)})'
         if name == 'abs':     return f'fabs((double)({a(0)}))'
         if name == 'sqrt':    return f'sqrt((double)({a(0)}))'
         if name == 'floor':   return f'(int64_t)floor((double)({a(0)}))'
@@ -247,6 +280,17 @@ class CodeGen:
         if name == 'load_sound':  return f'ff_load_sound({a(0)})'
         if name == 'save_image':  return f'(ff_save_image({a(0)}, {a(1)}), 0)'
         if name == 'read_file':   return f'ff_read_file({a(0)})'
+        if name == 'exists':      return f'ff_file_exists({a(0)})'
+        if name == 'save_list':
+            t = self.tmp('_lt')
+            self.emit(f'FFList {t} = {a(1)};')
+            self.emit(f'ff_save_list({a(0)}, {t});')
+            return '0'
+        if name == 'load_list':
+            t = self.tmp('_lt')
+            self.emit(f'FFList {t} = ff_load_list({a(0)});')
+            self._pending_frees.append(t)
+            return t
         if name == 'write_file':  return f'(ff_write_file({a(0)}, {a(1)}), 0)'
         if name == 'print':
             self._print(args); return '0'
@@ -285,6 +329,7 @@ class CodeGen:
             if attr == 'unpin':  return f'(ff_list_unpin(&{obj}), 0)'
             if attr == 'sync':   return f'(ff_list_sync(&{obj}), 0)'
             if attr == 'append': return f'(ff_list_append(&{obj}, (float)({a(0)})), 0)'
+            if attr == 'extend': return f'(ff_list_extend(&{obj}, {a(0)}), 0)'
             if attr == 'pop':    return f'ff_list_pop(&{obj})'
             if attr == 'resize': return f'(ff_list_resize(&{obj}, (int)({a(0)})), 0)'
             if attr == 'clear':  return f'(ff_list_clear(&{obj}), 0)'
@@ -557,11 +602,12 @@ class CodeGen:
                     if name not in mini and name not in hoisted:
                         vt = self._quick_type(s.value, mini)
                         # Only hoist scalars — lists need explicit allocation
-                        if vt in (INT, FLT, BOOL):
+                        if vt in (INT, FLT, BOOL, STR):
                             hoisted[name] = vt
         for name, vt in hoisted.items():
             ct = self.ctype(vt)
-            default = '0' if vt in (INT, BOOL) else '0.0'
+            default = ('0'    if vt in (INT, BOOL) else
+                       'NULL' if vt == STR         else '0.0')
             self.emit(f'{ct} {name} = {default};')
             self.scope.set(name, vt)
 
@@ -725,8 +771,10 @@ class CodeGen:
             if isinstance(fn, Ident) and fn.name in ptypes:
                 slots = ptypes[fn.name]
                 for i, arg in enumerate(node.args):
-                    if i < len(slots) and self._quick_type(arg, mini) == LIST:
-                        slots[i] = LIST
+                    if i < len(slots):
+                        qt = self._quick_type(arg, mini)
+                        if qt in (LIST, STR):
+                            slots[i] = qt
             args_to_scan = node.args
             if isinstance(fn, Attr):
                 self._scan_expr_calls(fn.obj, mini, ptypes)

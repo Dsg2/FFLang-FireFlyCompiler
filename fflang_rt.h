@@ -29,6 +29,12 @@ static inline void ff_sleep(double seconds) {
     WaitTime((float)seconds);   /* raylib */
 }
 
+static inline int ff_file_exists(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (f) { fclose(f); return 1; }
+    return 0;
+}
+
 static inline char* ff_read_file(const char* path) {
     FILE* f = fopen(path, "rb");
     if (!f) return "";
@@ -41,6 +47,74 @@ static inline char* ff_read_file(const char* path) {
 static inline void ff_write_file(const char* path, const char* s) {
     FILE* f = fopen(path, "wb");
     if (f) { fputs(s, f); fclose(f); }
+}
+
+/* ── String pool ──────────────────────────────────────────── */
+
+#define FF_STR_BUFS   16
+#define FF_STR_MAXLEN 512
+
+static char _ff_str_pool[FF_STR_BUFS][FF_STR_MAXLEN];
+static int  _ff_str_cur = 0;
+
+static inline char* _ff_next_str_buf(void) {
+    char* b = _ff_str_pool[_ff_str_cur % FF_STR_BUFS];
+    _ff_str_cur++;
+    return b;
+}
+
+/* str(x) — number to string; omits decimal point for whole numbers */
+static inline const char* ff_str(double x) {
+    char* b = _ff_next_str_buf();
+    long long xi = (long long)x;
+    if ((double)xi == x) snprintf(b, FF_STR_MAXLEN, "%lld", xi);
+    else                 snprintf(b, FF_STR_MAXLEN, "%g",   x);
+    return b;
+}
+
+static inline const char* ff_str_int(int64_t x) {
+    char* b = _ff_next_str_buf();
+    snprintf(b, FF_STR_MAXLEN, "%lld", (long long)x);
+    return b;
+}
+
+/* strcat(a, b) */
+static inline const char* ff_strcat(const char* a, const char* b) {
+    char* buf = _ff_next_str_buf();
+    snprintf(buf, FF_STR_MAXLEN, "%s%s", a, b);
+    return buf;
+}
+
+/* strsub(s, start, n) — n chars starting at index start */
+static inline const char* ff_strsub(const char* s, int64_t start, int64_t n) {
+    char* buf = _ff_next_str_buf();
+    int64_t slen = (int64_t)strlen(s);
+    if (start < 0)          start = 0;
+    if (start > slen)       start = slen;
+    if (n < 0)              n = 0;
+    if (start + n > slen)   n = slen - start;
+    if (n >= FF_STR_MAXLEN) n = FF_STR_MAXLEN - 1;
+    memcpy(buf, s + start, (size_t)n);
+    buf[n] = '\0';
+    return buf;
+}
+
+/* strfind(s, sub) — first index of sub in s, or -1 */
+static inline int64_t ff_strfind(const char* s, const char* sub) {
+    const char* p = strstr(s, sub);
+    return p ? (int64_t)(p - s) : (int64_t)-1;
+}
+
+/* strtrim(s) — strip leading and trailing whitespace */
+static inline const char* ff_strtrim(const char* s) {
+    char* buf = _ff_next_str_buf();
+    while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
+    int64_t n = (int64_t)strlen(s);
+    while (n > 0 && (s[n-1]==' '||s[n-1]=='\t'||s[n-1]=='\n'||s[n-1]=='\r')) n--;
+    if (n >= FF_STR_MAXLEN) n = FF_STR_MAXLEN - 1;
+    memcpy(buf, s, (size_t)n);
+    buf[n] = '\0';
+    return buf;
 }
 
 /* ── FFList ───────────────────────────────────────────────── */
@@ -96,6 +170,16 @@ static inline void ff_list_append(FFList* l, float val) {
         l->data = (float*)realloc(l->data, l->cap * sizeof(float));
     }
     l->data[l->len++] = val;
+}
+
+static inline void ff_list_extend(FFList* dst, FFList src) {
+    int new_len = dst->len + src.len;
+    if (new_len > dst->cap) {
+        dst->cap = new_len * 2;
+        dst->data = (float*)realloc(dst->data, dst->cap * sizeof(float));
+    }
+    memcpy(dst->data + dst->len, src.data, src.len * sizeof(float));
+    dst->len = new_len;
 }
 
 static inline float ff_list_pop(FFList* l) {
@@ -156,6 +240,29 @@ static inline void ff_list_print(FFList l) {
     }
     if (l.len > 8) printf(", ... (%d total)", l.len);
     printf("]\n");
+}
+
+/* ── List serialization ───────────────────────────────────── */
+
+static inline void ff_save_list(const char* path, FFList l) {
+    FILE* f = fopen(path, "wb");
+    if (!f) { fprintf(stderr, "fflang: cannot open '%s' for writing\n", path); return; }
+    int32_t n = (int32_t)l.len;
+    fwrite(&n, sizeof(int32_t), 1, f);
+    fwrite(l.data, sizeof(float), (size_t)n, f);
+    fclose(f);
+}
+
+static inline FFList ff_load_list(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (!f) { fprintf(stderr, "fflang: cannot open '%s' for reading\n", path); return ff_list_new(0); }
+    int32_t n = 0;
+    fread(&n, sizeof(int32_t), 1, f);
+    FFList l = ff_list_new(n);
+    fread(l.data, sizeof(float), (size_t)n, f);
+    l.len = n;
+    fclose(f);
+    return l;
 }
 
 /* ── FFImage ──────────────────────────────────────────────── */

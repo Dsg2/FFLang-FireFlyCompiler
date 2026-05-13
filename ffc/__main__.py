@@ -9,6 +9,7 @@ from .parser    import Parser, ParseError
 from .codegen   import CodeGen, CodeGenError
 from .ast_nodes import KernelDecl, FuncDef
 from .flc       import compile_fl, FLError
+from .opt       import optimize
 
 # ── Path resolution ──────────────────────────────────────────
 
@@ -127,6 +128,7 @@ Options:
   --run       Run the executable after a successful build
   --no-opencl Compile without OpenCL (no GPU calls)
   --debug     Add bounds-checking and debug symbols
+  --no-opt    Skip the FFLang optimizer pass
 """
 
 
@@ -242,6 +244,7 @@ def main():
     run_after = '--run'       in args
     no_opencl = '--no-opencl' in args
     debug     = '--debug'     in args
+    no_opt    = '--no-opt'    in args
 
     if not os.path.isfile(src_path):
         die(f'file not found: {src_path}')
@@ -262,6 +265,10 @@ def main():
         ast = Parser(tokens).parse()
     except ParseError as e:
         die(str(e))
+
+    # Optimize AST (FF-level passes: dead kernel elim, constant folding)
+    if not no_opt:
+        ast = optimize(ast, verbose=True)
 
     # Resolve tool paths — only prompt for what this build actually needs
     paths = _resolve_paths(need_gcc=not emit_c, need_klt=_has_kl(ast))

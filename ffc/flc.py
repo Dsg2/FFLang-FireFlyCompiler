@@ -442,6 +442,20 @@ class _BodyGen:
             r, rt = self._unary()
             if op == '%' and _F in (lt, rt):
                 l = f'fmod({l}, {r})'; lt = _F
+            elif op == '/':
+                lt = _F if _F in (lt, rt) else lt
+                # Division by a float literal → multiply by reciprocal (faster on GPU)
+                import re as _re
+                _flit = _re.fullmatch(r'\d+\.\d*f|\d*\.\d+f', r)
+                if _flit:
+                    fval = float(r.rstrip('f'))
+                    if fval != 0.0:
+                        recip = 1.0 / fval
+                        l = f'({l} * {recip:.9g}f)'
+                    else:
+                        l = f'({l} / {r})'
+                else:
+                    l = f'({l} / {r})'
             else:
                 lt = _F if _F in (lt, rt) else lt
                 l = f'({l} {op} {r})'
@@ -519,6 +533,20 @@ class _BodyGen:
                         while self._match(TT.COMMA):
                             c_args.append(self._expr()[0])
                     self._expect(TT.RPAREN)
+                    # pow(x, n) unrolling: replace with repeated multiplication
+                    # (avoids expensive transcendental for small integer exponents)
+                    if fn == 'pow' and len(c_args) == 2:
+                        import re as _re
+                        _exp_match = _re.fullmatch(r'(\d+)(?:\.0*f?)?|(\d+\.\d*)f', c_args[1])
+                        if _exp_match:
+                            exp = int(float(c_args[1].rstrip('f')))
+                            base = c_args[0]
+                            if exp == 2:
+                                return f'({base} * {base})', _F
+                            if exp == 3:
+                                return f'({base} * {base} * {base})', _F
+                            if exp == 4:
+                                return f'({base} * {base} * {base} * {base})', _F
                     return f'{fn}({", ".join(c_args)})', _F
                 # User-defined call (fallthrough — assume float return)
                 args = []
