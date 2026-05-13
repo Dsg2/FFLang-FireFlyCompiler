@@ -121,7 +121,7 @@ while true:
 
 ## Functions
 
-Parameter and return types are inferred from call sites. Use annotations to override inference for `list` params or when inference is ambiguous.
+Parameter and return types are inferred from call sites. Use annotations to override inference for `list` or `str` params, or when inference is ambiguous.
 
 ```python
 def clamp(v, lo, hi):
@@ -145,7 +145,23 @@ def add(a: list, b: list) -> list:   # return annotation is optional/information
 
 Supported annotation names: `int` `float` `bool` `str` `list` `image` `window` `sound`
 
-Without annotations, all un-annotated numeric params are inferred as `float` (double).
+Without annotations, all un-annotated numeric params default to `float` (double). String literal arguments at call sites automatically promote the corresponding param to `str`; list arguments promote to `list`.
+
+### Global Variables
+
+Functions can read and write module-level variables using the `global` statement:
+
+```python
+count = 0
+items = zeros(0)
+
+def add_item(v):
+    global count, items
+    items.append(v)
+    count = count + 1
+```
+
+Without `global`, assigning to a name inside a function creates a local variable that shadows the module-level one.
 
 ---
 
@@ -173,6 +189,7 @@ print(d)      # prints first 8 elements + total count
 
 ```python
 d.append(val)   # add one float to the end; grows capacity automatically
+d.extend(other) # append all elements of another list (single realloc + memcpy)
 v = d.pop()     # remove and return the last element → float
 d.resize(n)     # set length to n; new elements are zero; never shrinks capacity
 d.clear()       # set length to 0; keeps allocation intact (fast reset)
@@ -356,22 +373,44 @@ sleep(1.1)                   # wait (raylib WaitTime)
 
 ### Type Conversion
 
-| Call       | Returns | Description             |
-|------------|---------|-------------------------|
-| `int(x)`   | `int`   | cast to int64_t         |
-| `float(x)` | `float` | cast to double          |
-| `str(x)`   | `str`   | *(pass-through only)*   |
+| Call         | Returns | Description                                          |
+|--------------|---------|------------------------------------------------------|
+| `int(x)`     | `int`   | cast float/bool to int64_t                           |
+| `float(x)`   | `float` | cast int/bool to double                              |
+| `str(x)`     | `str`   | convert int or float to string; pass-through for str |
+| `toint(s)`   | `int`   | parse string to int (`atoi`; stops at first non-digit) |
+| `tofloat(s)` | `float` | parse string to float (`atof`)                       |
+
+### String Operations
+
+Strings (`str`) are immutable `const char*` values backed by a 16-slot rotating pool (each slot 512 bytes). Avoid holding more than ~8 string temporaries alive at once.
+
+| Call                   | Returns | Description                                              |
+|------------------------|---------|----------------------------------------------------------|
+| `strcat(a, b)`         | `str`   | concatenate two strings                                  |
+| `strlen(s)`            | `int`   | byte length (not including null terminator)              |
+| `streq(a, b)`          | `bool`  | true if strings are equal (`strcmp == 0`)                |
+| `strsub(s, start, n)`  | `str`   | n bytes starting at index start                          |
+| `strsub(s, start)`     | `str`   | from start to end of string                              |
+| `strfind(s, sub)`      | `int`   | first index of sub in s, or -1 if not found             |
+| `strtrim(s)`           | `str`   | strip leading and trailing whitespace                    |
+| `fmt(...)`             | `str`   | format string; first arg is a printf-style format string |
+
+**Pool note** — each string built-in consumes one pool slot. For character-by-character building (e.g. `b = strcat(b, ch)` in a loop), each iteration uses 2 slots; after 8 iterations the pool wraps and overwrites earlier results. For parsing, prefer `strfind` to locate delimiters and `strsub` to extract fields directly — this uses only 2–3 slots per field regardless of length.
 
 ### I/O
 
-| Call                  | Returns | Description                     |
-|-----------------------|---------|---------------------------------|
-| `print(...)`          | —       | print ints, floats, bools, strs, or a list |
-| `read_file(path)`     | `str`   | read entire text file           |
-| `write_file(path, s)` | —       | write string to file            |
-| `load_image(path)`    | `image` | load PNG/JPG into FFImage       |
-| `save_image(img, path)`| —      | export FFImage as PNG           |
-| `load_sound(path)`    | `sound` | load WAV into FFSound           |
+| Call                    | Returns | Description                                    |
+|-------------------------|---------|------------------------------------------------|
+| `print(...)`            | —       | print ints, floats, bools, strs, or a list     |
+| `read_file(path)`       | `str`   | read entire file into a string                 |
+| `write_file(path, s)`   | —       | write string to file                           |
+| `exists(path)`          | `bool`  | true if file exists                            |
+| `save_list(path, lst)`  | —       | write list to binary file (4-byte count header + float32 data) |
+| `load_list(path)`       | `list`  | read binary list file written by `save_list`   |
+| `load_image(path)`      | `image` | load PNG/JPG into FFImage                      |
+| `save_image(img, path)` | —       | export FFImage as PNG                          |
+| `load_sound(path)`      | `sound` | load WAV into FFSound                          |
 
 ### Multimedia
 
@@ -676,7 +715,8 @@ while win.open:
 
 - Classes or structs
 - Multi-file programs / imports
-- String operations beyond print / read / write
+- String mutation (strings are immutable; all operations return new pool strings)
+- Strings longer than 512 bytes from a single built-in call
 - 2D kernel dispatch (all kernels are 1D)
 - Inline kernel source (kernels must be in `.cl`, `.kl`, or `.fl` files)
 - Try/catch or exceptions
